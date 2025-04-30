@@ -193,7 +193,7 @@ visualize_features <- function(model, train_feature, train_response) {
   if (length(existing_features) == 0) {
     stop("No matching features between importance matrix and training data")
   }
-  
+  importance$Feature <- factor(importance$Feature, levels = existing_features)
   p1 <- ggplot(importance, aes(x = reorder(Feature, Importance), y = Importance)) +
     geom_col(fill = "#4292C6", width = 0.7) +
     coord_flip() +
@@ -221,6 +221,7 @@ visualize_features <- function(model, train_feature, train_response) {
     tibble::rownames_to_column("Feature") %>%
     pivot_longer(-Feature, names_to = "Class", values_to = "Value")
   df2$Class <- factor(df2$Class, levels = c("Normal", "Polyp", "CRC"))
+  df2$Feature <- factor(df2$Feature, levels = existing_features)
   
   p2 <- df2 %>%
     ggplot(aes(x = Class, y = Feature, fill = Value)) +
