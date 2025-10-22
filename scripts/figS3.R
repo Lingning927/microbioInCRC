@@ -1,262 +1,90 @@
 library(dplyr)
-library(randomForest)
-library(themis)
-library(caret)
-library(pROC)
+library(vegan)
 library(ggplot2)
-library(MLmetrics)
-library(reshape2)
-library(ROSE)
-library(doParallel)
+library(microeco)
+library(magrittr)
+library(ggtree)
+library(randomForest)
+library(pROC)
 library(metagenomeSeq)
-library(gt)
-library(patchwork)
-library(tidyr)
-#pre-process
+source("scripts/methods.R")
+#load the data
 {
-train_genus <- readRDS("data/train_genus.rds")
-train_family <- readRDS("data/train_family.rds")
-train_response <- readRDS("data/train_response.rds")
-colnames(train_genus) <- paste0("g_", colnames(train_genus), "")
-colnames(train_family) <- paste0("f_", colnames(train_family), "")
-
-test_genus <- readRDS("data/test_genus.rds")
-test_family <- readRDS("data/test_family.rds")
-test_response <- readRDS("data/test_response.rds")
-colnames(test_genus) <- paste0("g_", colnames(test_genus), "")
-colnames(test_family) <- paste0("f_", colnames(test_family), "")
-
-train_feature <- cbind(train_genus, train_family)
-test_feature <- cbind(test_genus, test_family)
-
-ms_obj <- newMRexperiment(t(train_feature))
-ms_obj <- cumNorm(ms_obj, p = 0.5)
-train_feature <- t(MRcounts(ms_obj, norm = TRUE, log = FALSE))
-
-ms_obj <- newMRexperiment(t(test_feature))
-ms_obj <- cumNorm(ms_obj, p = 0.5)
-test_feature <- t(MRcounts(ms_obj, norm = TRUE, log = FALSE))
+  genus_summed <- readRDS("data/genus_summed.rds")
+  genus_summed <- genus_summed[which(substr(rownames(genus_summed), 1, 1) %in% c("N", "a", "T")), ]
+  genus_summed <- genus_summed[, which(colSums(genus_summed > 0) > 0.05*nrow(genus_summed))]
+  feature_summed <- genus_summed
+  patient_info <- readRDS("data/patient_info.rds")
 }
 
-cv_rf_three <- function(train_feature, train_response, test_feature, test_response) {
+#paired CRC samples
+normal_names <- rownames(feature_summed)[11:68]
+crc_names <- sub("^N", "T", rownames(feature_summed)[11:68])
+feature_summed <- feature_summed[crc_names, ]
 
-  class_levels <- levels(train_response)
-  cv_metrics <- array(0, dim = c(5, 3, 3),
-                      dimnames = list(
-                        Fold = 1:5,
-                        Class = class_levels,
-                        Metric = c("Precision", "Recall", "F1")
-                      ))
-  
+#PCoA
+for (problem in c("I.II.III.IV", "HD_MD", "Location", "age", "gender", "survival")) {
+    deal_res <- deal_problem(feature_summed, patient_info, problem)
+    response <- deal_res$response
+    predictors <- deal_res$feature
+    otu <- predictors
+    otu.distance <- vegdist(otu)
+    pcoa <- cmdscale(otu.distance,eig=TRUE)
+    pc12 <- pcoa$points[,1:2]
+    pc <- round(pcoa$eig/sum(pcoa$eig)*100,digits=2)
+    pc12 <- as.data.frame(pc12)
+    df <- cbind(pc12, data.frame(Group = response))
 
-  set.seed(123)
-  folds <- createFolds(train_response, k = 5)
-  
-
-  for (i in 1:5) {
-    train_idx <- unlist(folds[-i])
-    val_idx <- folds[[i]]
-    
-    up_data <- upSample(x = train_feature[train_idx, ], 
-                        y = train_response[train_idx])
-    X_train_up <- up_data[, -ncol(up_data)]
-    y_train_up <- up_data$Class
-    
-    model <- randomForest(x = X_train_up, y = y_train_up)
-    
-    pred_val <- predict(model, train_feature[val_idx, ])
-    
-    cm <- confusionMatrix(pred_val, train_response[val_idx])
-    
-    for (cls in class_levels) {
-      cls_idx <- which(class_levels == cls)
-      precision <- cm$byClass[cls_idx, "Pos Pred Value"]
-      recall <- cm$byClass[cls_idx, "Sensitivity"]
-      f1 <- 2 * (precision * recall) / (precision + recall)
-      
-      cv_metrics[i, cls, "Precision"] <- precision
-      cv_metrics[i, cls, "Recall"] <- recall
-      cv_metrics[i, cls, "F1"] <- ifelse(is.nan(f1), 0, f1)
-    }
-  }
-  
-
-  cv_mean_metrics <- apply(cv_metrics, c(2, 3), mean, na.rm = TRUE)
-  
-  up_data_full <- upSample(x = train_feature, y = train_response)
-  X_train_full <- up_data_full[, -ncol(up_data_full)]
-  y_train_full <- up_data_full$Class
-  
-  final_model <- randomForest(x = X_train_full, y = y_train_full)
-  
-
-  pred_test <- predict(final_model, test_feature)
-  cm_test <- confusionMatrix(pred_test, test_response)
-  
-
-  test_metrics <- matrix(0, nrow = 3, ncol = 3,
-                        dimnames = list(
-                          Class = class_levels,
-                          Metric = c("Precision", "Recall", "F1")
-                        ))
-  
-  for (cls in class_levels) {
-    cls_idx <- which(class_levels == cls)
-    precision <- cm_test$byClass[cls_idx, "Pos Pred Value"]
-    recall <- cm_test$byClass[cls_idx, "Sensitivity"]
-    f1 <- 2 * (precision * recall) / (precision + recall)
-    
-    test_metrics[cls, ] <- c(precision, recall, ifelse(is.nan(f1), 0, f1))
-  }
-  
-  return(list(
-    cross_validation_metrics = cv_mean_metrics,
-    test_set_metrics = test_metrics,
-    test_confusion_matrix = cm_test$table
-  ))
+    p1 <- ggplot(data=df,aes(x=V1,y=V2,color=Group))+#指定数据、X轴、Y轴，颜色
+        geom_point(size=2) +#绘制点图并设定大小
+        theme_classic(base_size = 14) +
+        labs(x=paste0("PCoA1 (",pc[1],"%)"),
+            y=paste0("PCoA2 (",pc[2],"%)"))+#将x、y轴标题改为贡献度
+        stat_ellipse(data=df,
+                geom = "polygon",level=0.9,
+                linetype = 1,size=0.8,
+                aes(fill=Group),
+                alpha=0.1,
+                show.legend = T)  +
+                theme(legend.position = "top")
+    pdf(paste0("figs/figS3/Sub_pcoa", problem, "_genus.pdf"), width = 4, height = 4)
+      print(p1)
+    dev.off()
 }
 
-results <- cv_rf_three(train_feature, train_response,
-                         test_feature, test_response)
 
-results$cross_validation_metrics
-results$test_set_metrics
+#ROC plot
+{
+    feature_summed <- genus_summed
+    all_feature <- feature_summed
+    ms_obj <- newMRexperiment(t(all_feature))
+    ms_obj <- cumNorm(ms_obj, p = 0.5)
+    all_feature <- t(MRcounts(ms_obj, norm = TRUE, log = FALSE))
 
-cm_data <- as.data.frame(results$test_confusion_matrix)
-  colnames(cm_data) <- c("Predicted", "Actual", "Count")
-
-pdf("figs/figS3/cm_1.pdf", height = 3, width = 3.2)
-  heatmap_plot <- ggplot(cm_data, aes(x = Actual, y = Predicted, fill = Count)) +
-    geom_tile(color = "white", linewidth = 0.8) +
-    geom_text(aes(label = Count), color = "black", size = 5) +
-    scale_fill_gradient(low = "#F7FBFF", high = "#2171B5") +
-    labs(x = "Actual Class", y = "Predicted Class",
-         title = "Confusion Matrix Heatmap") +
-    theme_minimal(base_size = 12) +
-    theme(
-      plot.title = element_text(hjust = 0.5, face = "bold"),
-      panel.grid = element_blank(),
-      axis.text = element_text(color = "black"),
-      legend.position = "right"
-    ) +
-    coord_fixed()
-print(heatmap_plot)
-dev.off()
-
-tr_res <- deal_compares_three(train_feature, train_response)
-te_res <- deal_compares_three(test_feature, test_response)
-results <- cv_rf_three(tr_res$feature, tr_res$response, te_res$feature, te_res$response)
-
-results$test_confusion_matrix
-
-cm_data <- as.data.frame(results$test_confusion_matrix)
-  colnames(cm_data) <- c("Predicted", "Actual", "Count")
-  
-pdf("figs/figS3/cm_2.pdf", height = 3, width = 3.2)
-  heatmap_plot <- ggplot(cm_data, aes(x = Actual, y = Predicted, fill = Count)) +
-    geom_tile(color = "white", linewidth = 0.8) +
-    geom_text(aes(label = Count), color = "black", size = 5) +
-    scale_fill_gradient(low = "#F7FBFF", high = "#2171B5") +
-    labs(x = "Actual Class", y = "Predicted Class",
-         title = "Confusion Matrix Heatmap") +
-    theme_minimal(base_size = 12) +
-    theme(
-      plot.title = element_text(hjust = 0.5, face = "bold"),
-      panel.grid = element_blank(),
-      axis.text = element_text(color = "black"),
-      legend.position = "right"
-    ) +
-    coord_fixed()
-print(heatmap_plot)
-dev.off()
-
-
-visualize_features <- function(model, train_feature, train_response) {
-  library(ggplot2)
-  library(ggpubr)
-  library(tidyr)
-  library(dplyr)
-  
-  train_df <- as.data.frame(train_feature)
-  if (is.null(colnames(train_df))) {
-    colnames(train_df) <- paste0("V", 1:ncol(train_df))
-  }
-  
-  importance <- importance(model) %>% 
-    as.data.frame() %>%
-    tibble::rownames_to_column("Feature") %>%
-    arrange(desc(MeanDecreaseGini)) %>%
-    head(15)
-  colnames(importance)[2] <- "Importance"
-
-  existing_features <- intersect(importance$Feature, colnames(train_df))
-  if (length(existing_features) == 0) {
-    stop("No matching features between importance matrix and training data")
-  }
-  importance$Feature <- factor(importance$Feature, levels = existing_features)
-  p1 <- ggplot(importance, aes(x = reorder(Feature, Importance), y = Importance)) +
-    geom_col(fill = "#4292C6", width = 0.7) +
-    coord_flip() +
-    labs(x = "Feature", y = "Mean Decrease in Gini",
-         title = "Top 15 Feature Importance") +
-    theme_minimal(base_size = 12) +
-    theme(
-      panel.grid.major.y = element_blank(),
-      axis.text.y = element_text(color = "black", size = 10),
-      plot.title = element_text(hjust = 0.5, face = "bold")
-    )
-  
-    feature_means <- train_df %>%
-    select(all_of(existing_features)) %>%
-    mutate(Class = train_response) %>%
-    group_by(Class) %>%
-    summarise(across(everything(), mean)) %>%
-    pivot_longer(-Class, names_to = "Feature", values_to = "Mean") %>%
-    pivot_wider(names_from = Class, values_from = Mean) %>%
-    tibble::column_to_rownames("Feature")
-  
-  scaled_means <- as.data.frame(t(scale(t(feature_means))))
-
-  df2 <- scaled_means %>%
-    tibble::rownames_to_column("Feature") %>%
-    pivot_longer(-Feature, names_to = "Class", values_to = "Value")
-  df2$Class <- factor(df2$Class, levels = c("Normal", "Polyp", "CRC"))
-  df2$Feature <- factor(df2$Feature, levels = existing_features)
-  
-  p2 <- df2 %>%
-    ggplot(aes(x = Class, y = Feature, fill = Value)) +
-    geom_tile(color = "white", linewidth = 0.5) +
-    geom_text(aes(label = format(Value, digits = 2)), color = "black", size = 3) +
-    scale_fill_gradient2(low = "#2166AC", mid = "white", high = "#B2182B",
-                        midpoint = 0, limits = c(-3, 3)) +
-    labs(x = "Class", y = "Feature",
-         title = "Standardized Feature Means by Class") +
-    theme_minimal(base_size = 12) +
-    theme(
-      axis.text.x = element_text(angle = 45, hjust = 1, color = "black"),
-      axis.text.y = element_text(color = "black"),
-      plot.title = element_text(hjust = 0.5, face = "bold"),
-      legend.position = "right"
-    ) +
-    coord_fixed(ratio = 0.6)
-  
-  ggarrange(p1, p2, ncol = 2, labels = c("A", "B"), 
-           font.label = list(size = 14))
+    patient_info <- readRDS("data/patient_info.rds")
 }
 
-up_data_full <- upSample(x = train_feature, y = train_response)
-  X_train_full <- up_data_full[, -ncol(up_data_full)]
-  y_train_full <- up_data_full$Class
-  
-final_model <- randomForest(x = X_train_full, y = y_train_full)
-
-model <- final_model
-
-
-pdf("figs/figS3/feature_improtance.pdf", height = 6, width = 6)
-print(p1)
-dev.off()
-
-pdf("figs/figS3/feature_heatmap.pdf", height = 6, width = 6)
-print(p2)
+#ROC in train set
+problem_list <- c("Location", "I.II_III.IV", "I.II.III_IV", "HD_MD", "survival")
+roc_problems <- data.frame()
+name_ps <- c()
+for (problem in problem_list) {
+    deal_res <- deal_problem(all_feature, patient_info, problem)
+    response <- deal_res$response
+    predictors <- deal_res$feature
+    res_roc <- cv_roc_mean(response, predictors)
+    roc_data <- res_roc$roc_data
+    auc <- round(res_roc$auc, 3)
+    roc_data$problem <- rep(paste0(problem, "(AUC = ", auc, ")"), dim(roc_data)[1])
+    name_ps <- c(name_ps, paste0(problem, "(AUC = ", auc, ")"))
+    roc_problems <- rbind(roc_problems, roc_data)
+}
+roc_problems$problem <- factor(roc_problems$problem, levels = name_ps)
+pdf("figs/figS3/ROC_Problem_in_CRC.pdf", height = 3, width = 5)
+ggplot(roc_problems, aes(x = 1 - fpr, y = tpr, color = problem)) +
+  geom_line(size = 0.75) +
+  geom_abline(linetype = "dashed") +
+  labs(x = "1 - Specificity", y = "Sensitivity") +
+  scale_color_npg() +
+  theme_classic()
 dev.off()

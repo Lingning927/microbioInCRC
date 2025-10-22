@@ -171,6 +171,7 @@ cochran_armitage_results <- apply(feature_summed, 2, function(x) {
   return(result)
 })
 
+cochran_armitage_results <- p.adjust(cochran_armitage_results, "BH")
 significant_features_cochran <- cochran_armitage_results[order(cochran_armitage_results)[1:20]]
 
 res_feature <- names(significant_features_cochran)

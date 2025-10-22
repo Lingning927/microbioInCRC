@@ -56,7 +56,7 @@ for (genus in c(intersect_features, normal_crc_features, other_features)) {
     add_significance("p.adj") %>%
     add_xy_position(x = "Genus",  step.increase = 0.15)  
 
-    pdf(paste0("figs/figS6/boxplot_", problem, ".pdf"), width = 6.5, height = 3)
+    pdf(paste0("figs/figS9/boxplot_", problem, ".pdf"), width = 6.5, height = 3)
     p <- ggboxplot(cared_data, x = "Genus", y = "Abundance", fill = "Group",
          palette = "lancet", width = 0.8, outlier.shape = 20) +
     stat_pvalue_manual(

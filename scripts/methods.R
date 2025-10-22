@@ -214,6 +214,15 @@ deal_compares_tr <- function(compares, feature_summed, response) {
     return(list(response = response_new, feature = feature_new))
 }
 
+deal_compares2 <- function(compares, feature_summed, response) {
+  response <- as.character(response)
+  ids <- which(response %in% compares)
+  feature_new <- feature_summed[ids, ]
+  response_new <- response[ids]
+  response_new <- factor(response_new, levels = compares)
+  return(list(response = response_new, feature = feature_new))
+}
+
 test_roc <- function(train_feature, train_response, test_feature, test_response) {
   final_model <- randomForest(x = train_feature, y = train_response)
   pred_prob <- predict(final_model, newdata = test_feature, type="prob")
