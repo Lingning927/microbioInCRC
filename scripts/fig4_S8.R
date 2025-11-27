@@ -180,46 +180,17 @@ selected_feature <- sig_feature[c(2, 5, 6, 7, 8, 10, 12, 13)] #compare 7
 
 selected_feature <- sig_feature[c(2, 4, 5, 9, 13, 14)] #compare 3
 
-auc_df <- data.frame(AUC = numeric(), feature = character(), type = character())
-j <- 1
+
 non_zeros <- c()
 for (i in 1:length(selected_feature)) {
-  if (i <= 1) {
     sig_feature2 <- selected_feature[1:i]
-    rf_res <- glm_feaure(tr_res, te_res, sig_feature2)
-    auc_df[j, ] <- c(rf_res$tr_auc, selected_feature[i], "Train")
-    j <- j + 1
-    auc_df[j, ] <- c(rf_res$te_auc, selected_feature[i], "Test")
-    j <- j + 1
     if(i == 1) {
       non_zeros <- c(non_zeros, sum(all_feature[, sig_feature2] != 0))
     }else {
       non_zeros <- c(non_zeros, sum(rowSums(all_feature[, sig_feature2]) != 0))
     }
-  }else {
-    sig_feature2 <- selected_feature[1:i]
-    rf_res <- my_rf_train(tr_res, te_res, sig_feature2)
-    auc_df[j, ] <- c(rf_res$tr_auc, selected_feature[i], "Train")
-    j <- j + 1
-    auc_df[j, ] <- c(rf_res$te_auc, selected_feature[i], "Test")
-    j <- j + 1
-    non_zeros <- c(non_zeros, sum(rowSums(all_feature[, sig_feature2]) != 0))
-  }
 }
 non_zeros <- non_zeros / nrow(all_feature)
-auc_df$AUC <- as.numeric(auc_df$AUC)
-auc_df$feature <- factor(auc_df$feature, levels = selected_feature)
-auc_df$type <- factor(auc_df$type, levels = c("Train", "Test"))
-
-pdf("figs/fig4/Com_4_auc.pdf", width = 4, height = 3)
-ggplot(auc_df, aes(x = feature, y = AUC, color = type, group = type)) +
-  geom_point(size = 2.5) +
-  geom_line() +
-  theme_minimal() +
-  scale_color_d3() +
-  theme(axis.text.x = element_text(angle = -45),
-  axis.line = element_line(linewidth = 0.8))
-dev.off()
 
 
 ####ROC
@@ -275,4 +246,254 @@ ggplot(roc_problems, aes(x = 1 - fpr, y = tpr, color = problem)) +
   geom_abline(linetype = "dashed") +
   labs(x = "1 - Specificity", y = "Sensitivity") +
   theme_classic()
+dev.off()
+
+get_cv_auc <- function(genus_summed, response, k = 5) {
+  set.seed(100)
+  response <- as.factor(response)
+  if (length(levels(response)) != 2) stop("response必须为二分类因子")
+  
+  train_control <- trainControl(
+    method = "cv",
+    number = 5,
+    sampling = "up",
+    classProbs = TRUE,
+    summaryFunction = twoClassSummary,
+    savePredictions = "final"
+  )
+  
+  response <- relevel(response, ref = levels(response)[2])
+  
+  rf_model <- train(
+    x = genus_summed,
+    y = response,
+    method = "rf",
+    metric = "ROC",
+    trControl = train_control
+  )
+  aucs <- rf_model$resample$ROC
+  return(aucs)
+}
+
+train_cv_auc <- function(genus_summed, response) {
+    set.seed(100) 
+    folds <- createFolds(response, k = 5, returnTrain = TRUE)
+
+    cv_results <- lapply(names(folds), function(fold_name) {
+
+      train_index <- folds[[fold_name]]
+
+      train_x <- genus_summed[train_index, ]
+      train_y <- response[train_index]
+
+      test_x <- genus_summed[-train_index, ]
+      test_y <- response[-train_index]
+      
+      model_fit <- train(
+          x = train_x,
+          y = train_y,
+          method = "rf",
+          metric = "ROC",
+          trControl = trainControl(method="none", classProbs = TRUE),
+          nodesize = 5
+      )
+
+      pred_train <- predict(model_fit, train_x, type = "prob")
+      roc_train <- roc(train_y, pred_train[, levels(response)[2]], 
+                      levels = levels(response), direction = "<", quiet = TRUE)
+      auc_train <- as.numeric(roc_train$auc)
+
+      pred_test <- predict(model_fit, test_x, type = "prob")
+      roc_test <- roc(test_y, pred_test[, levels(response)[2]], 
+                      levels = levels(response), direction = "<", quiet = TRUE)
+      auc_test <- as.numeric(roc_test$auc)
+      
+      return(c(Train_AUC = auc_train, Test_AUC = auc_test))
+      })
+    cv_results_df <- do.call(rbind, cv_results) %>% as.data.frame()
+    cv_results_df$Train_AUC <- as.numeric(cv_results_df$Train_AUC)
+    cv_results_df$Test_AUC <- as.numeric(cv_results_df$Test_AUC)
+    return(cv_results_df$Train_AUC)
+}
+
+glm_cv <- function(genus_summed, response, sig_feature) {
+    my_split <- function(response, t = 5, seed = 100) {
+        values <- unique(response)
+        i1 <- which(response == values[1])
+        i2 <- which(response == values[2])
+        k1 <- round(length(i1) / t)
+        k2 <- round(length(i2) / t)
+        set.seed(seed)
+        res <- NULL
+        for (i in 1 : (t-1)) {
+          j1 <- sample(i1, k1)
+          j2 <- sample(i2, k2)
+          i1 <- setdiff(i1, j1)
+          i2 <- setdiff(i2, j2)
+          res[[i]] <- c(j1, j2)
+        }
+        res[[t]] <- c(i1, i2)
+        return(res)
+    }
+    up_data_full <- upSample(x = genus_summed, y = response)
+    X_train_full <- up_data_full[, -ncol(up_data_full)]
+    y_train_full <- up_data_full$Class
+    feature <- X_train_full[, sig_feature]
+    train_df <- data.frame(feature)
+    colnames(train_df) <- sig_feature
+    train_df$response <- y_train_full
+    train_df$response <- as.factor(train_df$response)
+    index_list <- my_split(y_train_full, 5, 100)
+    aucs <- c()
+    for (i in 1 : length(index_list)) {
+        sub_train_df <- train_df[-index_list[[i]], ]
+        sub_val_df <- train_df[index_list[[i]], ]
+        model <- glm(response ~., data = sub_train_df, family = binomial())
+        train_predictions <- predict(model, newdata = sub_val_df, type = "response")
+        val_roc <- roc(y_train_full[index_list[[i]]], train_predictions, quiet = TRUE)
+        aucs <- c(aucs, auc(val_roc))
+      }
+    return(aucs)
+}
+
+train_glm <- function(genus_summed, response, sig_feature) {
+    my_split <- function(response, t = 5, seed = 100) {
+        values <- unique(response)
+        i1 <- which(response == values[1])
+        i2 <- which(response == values[2])
+        k1 <- round(length(i1) / t)
+        k2 <- round(length(i2) / t)
+        set.seed(seed)
+        res <- NULL
+        for (i in 1 : (t-1)) {
+          j1 <- sample(i1, k1)
+          j2 <- sample(i2, k2)
+          i1 <- setdiff(i1, j1)
+          i2 <- setdiff(i2, j2)
+          res[[i]] <- c(j1, j2)
+        }
+        res[[t]] <- c(i1, i2)
+        return(res)
+    }
+    up_data_full <- upSample(x = genus_summed, y = response)
+    X_train_full <- up_data_full[, -ncol(up_data_full)]
+    y_train_full <- up_data_full$Class
+    feature <- X_train_full[, sig_feature]
+    train_df <- data.frame(feature)
+    colnames(train_df) <- sig_feature
+    train_df$response <- y_train_full
+    train_df$response <- as.factor(train_df$response)
+    index_list <- my_split(y_train_full, 5, 100)
+    aucs <- c()
+    for (i in 1 : length(index_list)) {
+        sub_train_df <- train_df[-index_list[[i]], ]
+        model <- glm(response ~., data = sub_train_df, family = binomial())
+        train_predictions <- predict(model, newdata = sub_train_df, type = "response")
+        train_roc <- roc(y_train_full[-index_list[[i]]], train_predictions, quiet = TRUE)
+        aucs <- c(aucs, auc(train_roc))
+      }
+    return(aucs)
+}
+
+res_train <- data.frame()
+for (i in 1:length(selected_feature)) {
+  sig_feature2 <- selected_feature[1:i]
+  tr_res <- deal_compares_tr(compares, feature_summed, response)
+  if (i <= 1) {
+    cv_res <- train_glm(tr_res$feature, tr_res$response, selected_feature[i])
+  }else {
+    cv_res <- get_cv_auc(tr_res$feature[, sig_feature2], tr_res$response, 6)
+  }
+  print(paste0("Feature: ", selected_feature[i]))
+  tmp_df <- data.frame(Feature = selected_feature[i],
+    AUCs = cv_res)
+  res_train <- rbind(res_train, tmp_df)
+  mean_auc <- mean(cv_res)
+  sd <- sd(cv_res)
+  ci_lower <- mean_auc - (sd / sqrt(length(cv_res)))
+  ci_upper <- mean_auc + (sd / sqrt(length(cv_res)))
+}
+
+
+
+my_plot <- function(res_train, res_test, selected_feature) {
+    summary_test <- res_test %>%
+    group_by(Feature) %>%
+    summarise(
+        mean_auc = mean(AUCs),
+        sd_auc = sd(AUCs),
+        n = n(),
+        se_auc = sd_auc / sqrt(n),
+        ci_lower = mean_auc - se_auc,
+        ci_upper = mean_auc + se_auc
+    ) %>%
+    mutate(type = "Validation")
+
+    summary_train<- res_train %>%
+    group_by(Feature) %>%
+    summarise(
+        mean_auc = mean(AUCs),
+        sd_auc = sd(AUCs),
+        n = n(),
+        se_auc = sd_auc / sqrt(n),
+        ci_lower = mean_auc - se_auc,
+        ci_upper = mean_auc + se_auc
+    ) %>%
+    mutate(type = "Train")
+
+    plot_df$type <- factor(plot_df$type, levels = c("Train", "Validation"))
+    plot_df <- rbind(summary_train, summary_test)
+    plot_df$Feature <- factor(plot_df$Feature, levels = selected_feature)
+    
+    return(plot_df)
+}
+
+res_test <- data.frame()
+for (i in 1:length(selected_feature)) {
+  sig_feature2 <- selected_feature[1:i]
+  tr_res <- deal_compares_tr(compares, feature_summed, response)
+  if (i <= 1) {
+    cv_res <- glm_cv(tr_res$feature, tr_res$response, selected_feature[i])
+  }else {
+    cv_res <- get_cv_auc(tr_res$feature[, sig_feature2], tr_res$response, 6)
+  }
+  print(paste0("Feature: ", selected_feature[i]))
+  tmp_df <- data.frame(Feature = selected_feature[i],
+    AUCs = cv_res)
+  res_test <- rbind(res_test, tmp_df)
+  mean_auc <- mean(cv_res)
+  sd <- sd(cv_res)
+  ci_lower <- mean_auc - (sd / sqrt(length(cv_res)))
+  ci_upper <- mean_auc + (sd / sqrt(length(cv_res)))
+}
+
+selected_feature <- sub("^g_", "", selected_feature)
+plot_df <- my_plot(res_train, res_test, selected_feature)
+
+pdf(paste0("figs/fig4/com", compare_num, ".pdf"), width = 4.7, height = 3)
+ggplot(plot_df, aes(x = Feature, y = mean_auc, group = type)) +
+  geom_point(aes(color = type), size = 1.5) +
+  geom_line(aes(color = type), linewidth = 0.5) +
+  geom_errorbar( data = plot_df[plot_df$type == "Train", ],
+    aes(x = Feature, ymin = ci_lower, ymax = ci_upper),
+    width = 0.3,
+    color = "darkred",
+    linewidth = 0.4
+  ) +
+  geom_text(data = plot_df[plot_df$type == "Train", ],
+    aes(x = Feature, label = sprintf("%.3f", mean_auc)),
+    vjust = 2,
+    hjust = 0.25,
+    size = 3
+  ) +
+  ggsci::scale_color_d3() +
+  labs(
+    y = "AUC"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = -45, vjust = -0.5, hjust = 0.5),
+    axis.line = element_line(linewidth = 0.5)
+  ) +
+  scale_y_continuous(limits = c(0.8, 1))
 dev.off()

@@ -1,90 +1,395 @@
-library(dplyr)
-library(vegan)
 library(ggplot2)
-library(microeco)
-library(magrittr)
-library(ggtree)
-library(randomForest)
-library(pROC)
-library(metagenomeSeq)
-source("scripts/methods.R")
-#load the data
-{
-  genus_summed <- readRDS("data/genus_summed.rds")
-  genus_summed <- genus_summed[which(substr(rownames(genus_summed), 1, 1) %in% c("N", "a", "T")), ]
-  genus_summed <- genus_summed[, which(colSums(genus_summed > 0) > 0.05*nrow(genus_summed))]
-  feature_summed <- genus_summed
-  patient_info <- readRDS("data/patient_info.rds")
+library(vegan)
+library(dplyr)
+library(ggsci)
+library(ggrepel)
+library(stringr)
+library(glmnet)
+library(dplyr)
+library(tidyr)
+library(patchwork)
+
+get_group_label <- function(patient_info, problem) {
+  n <- dim(patient_info)[2]
+  group_label <- rep("-", n)
+  if (problem == "age") {
+    ages <- as.numeric(patient_info[problem, ])
+    for (i in 1:n) {
+      if(ages[i] <= 60) {
+        group_label[i] <- "Young (<=60)"
+      }else {
+        group_label[i] <- "Senior (>60)"
+      }
+    }
+  }else if (problem == "gender") {
+    group_label <- as.character(patient_info["gender", ])
+  }else if (problem == "Location") {
+    location <- as.character(patient_info["Location", ])
+    location[which(location == "left")] <- "Left"
+    location[which(location == "right")] <- "Right"
+    group_label <- location
+    #group_label[!(group_label %in% c("Left", "Rectum", "Right"))] <- "-"
+  }else if (problem == "Location2") {
+    location <- as.character(patient_info["Location", ])
+    location[which(location == "left")] <- "Left"
+    location[which(location == "right")] <- "Right"
+    group_label <- location
+    group_label[!(group_label %in% c("Right"))] <- "Left"
+  }else if (problem == "survival") {
+    survival <- as.character(patient_info[problem, ])
+    group_label[which(survival %in% c("w", "W"))] <- "Dead"
+    group_label[which(survival %in% c("c", "C"))] <- "Alive"
+  }else if (problem == "M") {
+    group_label <- as.character(patient_info[problem, ])
+    group_label[group_label == "MO"] <- "M0"
+  }else if (problem == "N") {
+    group_label <- as.character(patient_info[problem, ])
+    #group_label[(group_label %in% c("N1", "N2"))] <- "N1+N2"
+  }else if (problem == "T") {
+    group_label <- as.character(patient_info[problem, ])
+    #group_label[(group_label %in% c("T1", "T2"))] <- "T1+T2"
+    #group_label[(group_label %in% c("T3", "T4"))] <- "T3+T4"
+  }else if (problem == "MSI") {
+    group_label <- as.character(patient_info[problem, ])
+    group_label[group_label == "MSI"] <- "MSI-H"
+    group_label[group_label == "MSI-L"] <- "MSI-H"
+  }else if (problem == "CEA(ng/mL)") {
+    cea <- as.character(patient_info[problem, ])
+    cea[cea == "-"] <- -1
+    #cea[495] <- 1.87
+    cea <- as.numeric(cea)
+    for(i in 1:n) {
+      if(cea[i] < 0) {
+        group_label[i] <- "-"
+      }else if(cea[i] <= 5) {
+        group_label[i] <- "Normal"
+      }else {
+        group_label[i] <- "Higher"
+      }
+    }
+  }else if (problem == "relapse after operation(month)") {
+    cea <- as.character(patient_info[problem, ])
+    cea[cea == "-"] <- -1
+    cea <- as.numeric(cea)
+    for(i in 1:n) {
+      if(cea[i] < 0) {
+        group_label[i] <- "-"
+      }else if(cea[i] <= 12) {
+        group_label[i] <- "One-"
+      }else if(cea[i] <= 36) {
+        group_label[i] <- "Two-Three"
+      }else {
+        group_label[i] <- "Three+"
+      }
+    }
+  }else if (problem == "albumin(g/L)") {
+    cea <- as.character(patient_info[problem, ])
+    cea[cea == "24,5"] <- 24.5
+    cea[cea == "31.5`"] <- 31.5
+    cea[547] <- 38.1
+    cea <- as.numeric(cea)
+    for(i in 1:n) {
+      if(cea[i] >= 35) {
+        group_label[i] <- "Normal"
+      }else {
+        group_label[i] <- "Lower"
+      }
+    }
+  }else if (problem == "PreAndPost") {
+    ms <- get_group_label(patient_info, "metastatic site")
+    pms <- get_group_label(patient_info, "postoperative metastatic site")
+    id1 <- names(ms[(ms != "-") & (pms == "-")])
+    id2 <- names(ms[(ms == "-") & (pms != "-")])
+    group_label <- c(rep("Preoperative", length(id1)), rep("Postoperative", length(id2)))
+    names(group_label) <- c(id1, id2)
+  }else if (problem == "metastasis") {
+    group_label <- get_group_label(patient_info, "metastatic site")
+    group_label <- ifelse(group_label == "-", "Non-metastasis",
+      "Metastasis")
+  }else if (problem == "I.II_III.IV") {
+    group_label <- get_group_label(patient_info, "I.II.III.IV")
+    group_label <- ifelse(group_label %in% c("I", "II"), "I,II",
+      "III,IV")
+  }else if (problem == "I_II.III.IV") {
+    group_label <- get_group_label(patient_info, "I.II.III.IV")
+    group_label <- ifelse(group_label == "I", "I",
+      "II,III,IV")
+  }else if (problem == "I.II.III_IV") {
+    group_label <- get_group_label(patient_info, "I.II.III.IV")
+    group_label <- ifelse(group_label == "IV", "IV",
+      "I,II,III")
+  }else if (problem == "I.II_III_IV") {
+    group_label <- get_group_label(patient_info, "I.II.III.IV")
+    group_label <- group_label[(group_label %in% c("I", "II"))] <- "I,II"
+  }else {
+    group_label <- as.character(patient_info[problem, ])
+  }
+  if(problem != "PreAndPost") {
+      names(group_label) <- colnames(patient_info)
+  }
+  return(group_label)
 }
 
-#paired CRC samples
-normal_names <- rownames(feature_summed)[11:68]
-crc_names <- sub("^N", "T", rownames(feature_summed)[11:68])
-feature_summed <- feature_summed[crc_names, ]
+genus_summed <- readRDS("data/genus_summed.rds")
+genus_summed <- genus_summed[which(substr(rownames(genus_summed), 1, 1) %in% c("N", "a", "T")), ]
+genus_summed <- genus_summed[, which(colSums(genus_summed > 0) > 0.05*nrow(genus_summed))]
+feature_summed <- genus_summed
+response <- substr(rownames(feature_summed), 1, 1)
+response = case_when(
+    response == "N" ~ "Normal",
+    response == "a" ~ "Polyp",
+    response == "T" ~ "CRC"
+  )
+response <- factor(response, levels = c("Normal", "Polyp", "CRC"))
 
-#PCoA
-for (problem in c("I.II.III.IV", "HD_MD", "Location", "age", "gender", "survival")) {
-    deal_res <- deal_problem(feature_summed, patient_info, problem)
-    response <- deal_res$response
-    predictors <- deal_res$feature
-    otu <- predictors
-    otu.distance <- vegdist(otu)
-    pcoa <- cmdscale(otu.distance,eig=TRUE)
-    pc12 <- pcoa$points[,1:2]
-    pc <- round(pcoa$eig/sum(pcoa$eig)*100,digits=2)
-    pc12 <- as.data.frame(pc12)
-    df <- cbind(pc12, data.frame(Group = response))
+info_tb <- read.csv("data/info_tb.csv")
+rownames(info_tb) <- info_tb$X
+info_tb <- info_tb[, -1]
+survival_state <- get_group_label(info_tb, "survival")
+age <- get_group_label(info_tb, "age")
+gender <- get_group_label(info_tb, "gender")
+stage <- get_group_label(info_tb, "Stage")
+location <- get_group_label(info_tb, "Location2")
+differentiation <- get_group_label(info_tb, "differentiation")
+feature <- deal_res$feature
+chemotherapy <- get_group_label(info_tb, "chemotherapy")
+id_survival <- which(survival_state != "-")
+id_zhiliao <- which(chemotherapy != "" & chemotherapy != "-")
 
-    p1 <- ggplot(data=df,aes(x=V1,y=V2,color=Group))+#指定数据、X轴、Y轴，颜色
-        geom_point(size=2) +#绘制点图并设定大小
-        theme_classic(base_size = 14) +
-        labs(x=paste0("PCoA1 (",pc[1],"%)"),
-            y=paste0("PCoA2 (",pc[2],"%)"))+#将x、y轴标题改为贡献度
-        stat_ellipse(data=df,
-                geom = "polygon",level=0.9,
-                linetype = 1,size=0.8,
-                aes(fill=Group),
-                alpha=0.1,
-                show.legend = T)  +
-                theme(legend.position = "top")
-    pdf(paste0("figs/figS3/Sub_pcoa", problem, "_genus.pdf"), width = 4, height = 4)
-      print(p1)
-    dev.off()
+chemotherapy[] <- "No"
+chemotherapy[id_zhiliao] <- "Yes"
+table(chemotherapy)
+survival_state <- survival_state[id_survival]
+
+survival_state <- factor(survival_state, levels = c("Alive", "Dead"))
+chemotherapy <- factor(chemotherapy)
+stage <- factor(stage, levels = c("I", "II", "III", "IV"))
+chemotherapy <- chemotherapy[id_survival]
+stage <- stage[id_survival]
+age <- age[id_survival]
+gender <- gender[id_survival]
+location <- location[id_survival]
+differentiation <- differentiation[id_survival]
+
+meta_data <- data.frame(
+  survival_state = survival_state,
+  stage = stage,
+  chemotherapy = chemotherapy,
+  age = age,
+  gender = gender,
+  location = location,
+  differentiation = differentiation
+)
+
+microbiota_data <- feature[rownames(meta_data), ]
+all(rownames(meta_data) == rownames(microbiota_data))
+
+
+#Figure S3 A
+results <- list()
+bacterium_names <- colnames(microbiota_data)
+
+for (bacterium in bacterium_names) {
+  temp_df <- cbind(meta_data, bacterium_abundance = microbiota_data[, bacterium])
+  model_fit <- try(
+    glm(survival_state ~ stage + chemotherapy + age + gender + location + differentiation + bacterium_abundance,
+        data = temp_df, family = binomial),
+    silent = TRUE
+  )
+    p_val <- summary(model_fit)$coefficients["bacterium_abundance", "Pr(>|z|)"]
+    coef <- summary(model_fit)$coefficients["bacterium_abundance", "Estimate"]
+    results[[bacterium]] <- c(p_value = p_val, odds_ratio = exp(coef))
+}
+
+results_df <- do.call(rbind, results)
+results_df <- as.data.frame(results_df)
+results_df$bacterium <- rownames(results_df)
+
+results_df$p_adj <- p.adjust(results_df$p_value, method = "BH")
+results_df$log2_odds_ratio <- log2(results_df$odds_ratio)
+results_df$neg_log10_p_adj <- -log10(results_df$p_adj)
+
+pdf("figs/figS3/volcano_survival.pdf", width = 4, height = 3)
+ggplot(results_df, aes(x = log2_odds_ratio, y = neg_log10_p_adj)) +
+  geom_point(aes(color = p_adj < 0.05), alpha = 0.6, size = 2) +
+  scale_color_manual(values = c("TRUE" = "red", "FALSE" = "grey"), 
+                     name = "FDR < 0.05",
+                     labels = c("Significant", "Not Significant")) +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "blue") +
+  geom_vline(xintercept = c(-0.5, 0.5), linetype = "dashed", color = "grey") +
+  labs(
+    x = "Log2 (Odds Ratio)",
+    y = "-Log10 (Adjusted P-value)"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "bottom", plot.title = element_text(hjust = 0.5, face="bold")) +
+  geom_text_repel(data = subset(results_df, p_adj < 0.05),
+                  aes(label = bacterium), size = 3)
+dev.off()
+
+
+#Fig S3B
+X <- model.matrix(survival_state ~ stage + chemotherapy + age + gender + location + differentiation, data = meta_data)[, -1] 
+X <- cbind(X, microbiota_data)
+Y <- meta_data$survival_state
+
+set.seed(123)
+cv_lasso <- cv.glmnet(X, Y, family = "binomial", alpha = 1) # alpha=1 代表LASSO
+best_lambda <- cv_lasso$lambda.min
+coefs <- coef(cv_lasso, s = best_lambda)
+selected_vars_names <- rownames(coefs)[which(coefs != 0)]
+selected_vars_names <- selected_vars_names[selected_vars_names != "(Intercept)"]
+selected_vars_names[4] <- "ageYoung"
+
+if (length(selected_vars_names) == 0) {
+  print("LASSO did not select any variables. Only clinical factors might be relevant if forced.")
+} else {
+  final_data <- as.data.frame(X)
+  final_data$survival_state <- Y
+  colnames(final_data)[5] <- "ageYoung"
+  final_formula <- as.formula(paste("survival_state ~", paste(selected_vars_names, collapse = " + ")))
+  final_glm <- glm(final_formula, data = final_data, family = binomial)
 }
 
 
-#ROC plot
-{
-    feature_summed <- genus_summed
-    all_feature <- feature_summed
-    ms_obj <- newMRexperiment(t(all_feature))
-    ms_obj <- cumNorm(ms_obj, p = 0.5)
-    all_feature <- t(MRcounts(ms_obj, norm = TRUE, log = FALSE))
+glm_summary_df <- as.data.frame(summary(final_glm)$coefficients)
+glm_summary_df$variable <- rownames(glm_summary_df)
+rownames(glm_summary_df) <- NULL
+glm_summary_df <- glm_summary_df %>% filter(variable != "(Intercept)")
 
-    patient_info <- readRDS("data/patient_info.rds")
+round_df <- function(x, digits) {
+  format(round(x, digits), nsmall = digits)
 }
+glm_summary_df <- glm_summary_df[which(glm_summary_df[, 4] < 0.05), ]
 
-#ROC in train set
-problem_list <- c("Location", "I.II_III.IV", "I.II.III_IV", "HD_MD", "survival")
-roc_problems <- data.frame()
-name_ps <- c()
-for (problem in problem_list) {
-    deal_res <- deal_problem(all_feature, patient_info, problem)
-    response <- deal_res$response
-    predictors <- deal_res$feature
-    res_roc <- cv_roc_mean(response, predictors)
-    roc_data <- res_roc$roc_data
-    auc <- round(res_roc$auc, 3)
-    roc_data$problem <- rep(paste0(problem, "(AUC = ", auc, ")"), dim(roc_data)[1])
-    name_ps <- c(name_ps, paste0(problem, "(AUC = ", auc, ")"))
-    roc_problems <- rbind(roc_problems, roc_data)
-}
-roc_problems$problem <- factor(roc_problems$problem, levels = name_ps)
-pdf("figs/figS3/ROC_Problem_in_CRC.pdf", height = 3, width = 5)
-ggplot(roc_problems, aes(x = 1 - fpr, y = tpr, color = problem)) +
-  geom_line(size = 0.75) +
-  geom_abline(linetype = "dashed") +
-  labs(x = "1 - Specificity", y = "Sensitivity") +
-  scale_color_npg() +
-  theme_classic()
+plot_data <- glm_summary_df %>%
+  mutate(
+    odds_ratio = exp(Estimate),
+    ci_low = exp(Estimate - 1.96 * `Std. Error`),
+    ci_high = exp(Estimate + 1.96 * `Std. Error`),
+    estimate_str = round_df(Estimate, 2),
+    std_error_str = round_df(`Std. Error`, 2),
+    p_value_str = ifelse(`Pr(>|z|)` < 0.001, "< 0.001", round_df(`Pr(>|z|)`, 3)),
+    or_ci_str = paste0(round_df(odds_ratio, 2), " (", round_df(ci_low, 2), "-", round_df(ci_high, 2), ")")
+  ) %>%
+  arrange(odds_ratio) %>%
+  mutate(variable_wrapped = str_wrap(variable, width = 10)) %>%
+  mutate(variable_wrapped = factor(variable_wrapped, levels = .$variable_wrapped))
+
+
+
+p_table <- ggplot(plot_data, aes(y = variable_wrapped)) +
+  geom_text(aes(x = 0, label = variable_wrapped), hjust = 0, vjust = 0.5, size = 3.5) +
+  geom_text(aes(x = 1.5, label = estimate_str), hjust = 0.5) +
+  geom_text(aes(x = 2.5, label = std_error_str), hjust = 0.5) +
+  geom_text(aes(x = 3.5, label = p_value_str), hjust = 0.5) +
+  geom_text(aes(x = 4.7, label = or_ci_str), hjust = 0.5) +
+  annotate("text", x = 0, y = nrow(plot_data) + 1.2, label = "Variable", hjust = 0, fontface = "bold") +
+  annotate("text", x = 1.5, y = nrow(plot_data) + 1.2, label = "Estimate", hjust = 0.5, fontface = "bold") +
+  annotate("text", x = 2.5, y = nrow(plot_data) + 1.2, label = "Std. Error", hjust = 0.5, fontface = "bold") +
+  annotate("text", x = 3.5, y = nrow(plot_data) + 1.2, label = "P-value", hjust = 0.5, fontface = "bold") +
+  annotate("text", x = 4.7, y = nrow(plot_data) + 1.2, label = "Odds Ratio (95% CI)", hjust = 0.5, fontface = "bold") +
+  
+  theme_void() +
+  coord_cartesian(xlim = c(0, 5.7))
+
+
+p_forest <- ggplot(plot_data, aes(x = odds_ratio, y = variable_wrapped)) +
+  geom_vline(xintercept = 1, linetype = "dashed", color = "grey50") +
+  geom_point(size = 3, color = "#0072B2") +
+  geom_errorbarh(aes(xmin = ci_low, xmax = ci_high), height = 0.2, color = "#0072B2") +
+  labs(x = "Odds Ratio") +
+  theme_classic() +
+  theme(
+    axis.text.y = element_blank(),
+    axis.ticks.y = element_blank(),
+    axis.line.y = element_blank(),
+    axis.title.y = element_blank(),
+    panel.grid.major.x = element_line(color = "grey90", linetype = "dotted")
+  ) +
+  scale_x_log10()
+
+
+final_plot <- p_table + p_forest + plot_layout(widths = c(3.5, 2))
+
+final_plot_with_title <- final_plot + 
+  plot_annotation(title = "Multivariable Logistic Regression Model after LASSO Selection") & 
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"))
+
+pdf("figs/figS3/forest_plot_survival_combined.pdf", width = 10, height = 6)
+print(final_plot_with_title)
+dev.off()
+
+#Fig S3 C
+full_data <- cbind(meta_data, microbiota_data)
+colnames(full_data) <- make.names(colnames(full_data))
+set.seed(45)
+train_index <- createDataPartition(full_data$survival_state, p = 0.7, list = FALSE)
+train_data <- full_data[train_index, ]
+test_data <- full_data[-train_index, ]
+
+set.seed(42)
+rf_clinical <- randomForest(
+  survival_state ~ stage + chemotherapy,
+  data = train_data,
+  ntree = 500,
+  importance = TRUE
+)
+
+set.seed(42)
+rf_full <- randomForest(
+  survival_state ~ .,
+  data = train_data,
+  ntree = 500,
+  importance = TRUE
+)
+
+pred_clinical_prob <- predict(rf_clinical, newdata = test_data, type = "prob")[, "Dead"]
+pred_full_prob <- predict(rf_full, newdata = test_data, type = "prob")[, "Dead"]
+
+roc_clinical <- roc(test_data$survival_state, pred_clinical_prob, levels = c("Alive", "Dead"))
+roc_full <- roc(test_data$survival_state, pred_full_prob, levels = c("Alive", "Dead"))
+
+auc_clinical_val <- auc(roc_clinical)
+auc_full_val <- auc(roc_full)
+
+cat("AUC for Clinical-Only Model:", round(auc_clinical_val, 4), "\n")
+cat("AUC for Full Model (Clinical + Microbiota):", round(auc_full_val, 4), "\n")
+
+
+roc_list <- list(
+  "Clinical Only" = roc_clinical,
+  "Clinical + Microbiota" = roc_full
+)
+
+pdf("figs/figS3/roc_survival.pdf", width = 4, height = 3.5)
+ggroc(roc_list, legacy.axes = TRUE, linewidth = 1) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "grey") +
+  labs(
+    x = "1 - Specificity",
+    y = "Sensitivity",
+    color = ""
+  ) +
+  theme_classic() +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 16),
+    legend.position = "up",
+    legend.title = element_text(face = "bold"),
+    axis.title = element_text(size = 12)
+  ) +
+  scale_color_manual(
+    name = "Model",
+    values = c("Clinical Only" = "#0072B2", "Clinical + Microbiota" = "#D55E00"),
+    labels = c(
+      `Clinical Only` = paste0("Clinical Only (AUC = ", round(auc_clinical_val, 3), ")"),
+      `Clinical + Microbiota` = paste0("Clinical + Microbiota (AUC = ", round(auc_full_val, 3), ")")
+    )
+  ) +
+  annotate("text", x = 0.75, y = 0.25, 
+           label = paste("AUC (Clinical Only):", round(auc_clinical_val, 3)), 
+           color = "#0072B2", size = 4) +
+  annotate("text", x = 0.75, y = 0.18, 
+           label = paste("AUC (Full Model):", round(auc_full_val, 3)), 
+           color = "#D55E00", size = 4)
+
 dev.off()

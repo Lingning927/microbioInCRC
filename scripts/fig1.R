@@ -7,7 +7,6 @@ library(ggtree)
 source("scripts/methods.R")
 #load the data
 {
-
   genus_summed <- readRDS("data/genus_summed.rds")
   genus_summed <- genus_summed[which(substr(rownames(genus_summed), 1, 1) %in% c("N", "a", "T")), ]
   genus_summed <- genus_summed[, which(colSums(genus_summed > 0) > 0.05*nrow(genus_summed))]
