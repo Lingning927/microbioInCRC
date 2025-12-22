@@ -185,7 +185,7 @@ microbiota_data <- feature[rownames(meta_data), ]
 all(rownames(meta_data) == rownames(microbiota_data))
 
 
-#Figure S3 A
+#Figure S4 A
 results <- list()
 bacterium_names <- colnames(microbiota_data)
 
@@ -209,7 +209,7 @@ results_df$p_adj <- p.adjust(results_df$p_value, method = "BH")
 results_df$log2_odds_ratio <- log2(results_df$odds_ratio)
 results_df$neg_log10_p_adj <- -log10(results_df$p_adj)
 
-pdf("figs/figS3/volcano_survival.pdf", width = 4, height = 3)
+pdf("figs/figS4/volcano_survival.pdf", width = 4, height = 3)
 ggplot(results_df, aes(x = log2_odds_ratio, y = neg_log10_p_adj)) +
   geom_point(aes(color = p_adj < 0.05), alpha = 0.6, size = 2) +
   scale_color_manual(values = c("TRUE" = "red", "FALSE" = "grey"), 
@@ -228,7 +228,7 @@ ggplot(results_df, aes(x = log2_odds_ratio, y = neg_log10_p_adj)) +
 dev.off()
 
 
-#Fig S3B
+#Fig S4B
 X <- model.matrix(survival_state ~ stage + chemotherapy + age + gender + location + differentiation, data = meta_data)[, -1] 
 X <- cbind(X, microbiota_data)
 Y <- meta_data$survival_state
@@ -316,11 +316,11 @@ final_plot_with_title <- final_plot +
   plot_annotation(title = "Multivariable Logistic Regression Model after LASSO Selection") & 
   theme(plot.title = element_text(hjust = 0.5, face = "bold"))
 
-pdf("figs/figS3/forest_plot_survival_combined.pdf", width = 10, height = 6)
+pdf("figs/figS4/forest_plot_survival_combined.pdf", width = 10, height = 6)
 print(final_plot_with_title)
 dev.off()
 
-#Fig S3 C
+#Fig S4 C
 full_data <- cbind(meta_data, microbiota_data)
 colnames(full_data) <- make.names(colnames(full_data))
 set.seed(45)
@@ -362,7 +362,7 @@ roc_list <- list(
   "Clinical + Microbiota" = roc_full
 )
 
-pdf("figs/figS3/roc_survival.pdf", width = 4, height = 3.5)
+pdf("figs/figS4/roc_survival.pdf", width = 4, height = 3.5)
 ggroc(roc_list, legacy.axes = TRUE, linewidth = 1) +
   geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "grey") +
   labs(
@@ -392,4 +392,219 @@ ggroc(roc_list, legacy.axes = TRUE, linewidth = 1) +
            label = paste("AUC (Full Model):", round(auc_full_val, 3)), 
            color = "#D55E00", size = 4)
 
+dev.off()
+
+
+
+survival_time_info <- read.csv("data/Survival_info.csv")
+head(as.character(survival_time_info[1, ]))
+state2 <- as.character(survival_time_info[1, rownames(microbiota_data)])
+meta_data$survival_state <- factor(state2, levels = c("Dead", "Alive"))
+time2 <- as.numeric(survival_time_info[2, rownames(microbiota_data)])
+time2[state2 == "Alive"] <- 60
+
+
+meta_data$survival_state <- ifelse(state2 == "Dead", 1, 0)
+
+library(metagenomeSeq)
+  ms_obj <- newMRexperiment(t(microbiota_data))
+  ms_obj <- cumNorm(ms_obj, p = 0.5)
+  otu_table_norm <- t(MRcounts(ms_obj, norm = TRUE, log = TRUE))
+  microbiota_data <- otu_table_norm
+
+#####
+library(survival)
+library(ggplot2)
+library(ggrepel)
+
+results <- list()
+bacterium_names <- colnames(microbiota_data)
+
+for (bacterium in bacterium_names) {
+  temp_df <- cbind(meta_data, bacterium_abundance = microbiota_data[, bacterium])
+
+  clean_df <- temp_df[!is.na(temp_df$survival_time) & 
+                      !is.na(temp_df$survival_state) & 
+                      !is.na(temp_df$bacterium_abundance), ]
+  if (nrow(clean_df) < 10) next 
+
+  model_fit <- try({
+    coxph(Surv(survival_time, survival_state) ~ stage + chemotherapy + age + 
+            gender + location + differentiation + bacterium_abundance,
+          data = clean_df)
+  }, silent = TRUE)
+  
+  if (!inherits(model_fit, "try-error")) {
+    s <- summary(model_fit)
+    
+    if ("bacterium_abundance" %in% rownames(s$coefficients)) {
+      p_val <- s$coefficients["bacterium_abundance", "Pr(>|z|)"]
+      hr <- s$coefficients["bacterium_abundance", "exp(coef)"]
+      coef_val <- s$coefficients["bacterium_abundance", "coef"]
+      
+      results[[bacterium]] <- c(p_value = p_val, hazard_ratio = hr, coef = coef_val)
+    }
+  }
+}
+
+results_df <- as.data.frame(do.call(rbind, results))
+results_df$bacterium <- rownames(results_df)
+results_df$p_adj <- p.adjust(results_df$p_value, method = "BH")
+results_df$log2_hr <- log2(results_df$hazard_ratio)
+results_df$neg_log10_p_adj <- -log10(results_df$p_adj)
+sum(results_df$p_adj < 0.05)
+
+pdf("figs/figS3/volcano_survival_cox.pdf", width = 5, height = 4)
+ggplot(results_df, aes(x = log2_hr, y = neg_log10_p_adj)) +
+  geom_point(aes(color = p_adj < 0.05), alpha = 0.6, size = 2) +
+  scale_color_manual(values = c("FALSE" = "grey", "TRUE" = "red"), 
+                     name = "FDR < 0.05",
+                     labels = c("Not Significant", "Significant")) +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "blue") +
+  geom_vline(xintercept = c(-log2(1.5), log2(1.5)), linetype = "dashed", color = "grey") + 
+  labs(
+    title = "Survival Analysis (Cox PH)",
+    x = "Log2 (Hazard Ratio)",
+    y = "-Log10 (Adjusted P-value)"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "bottom") +
+  geom_text_repel(data = subset(results_df, p_adj < 0.05),
+                  aes(label = bacterium), size = 3)
+dev.off()
+
+# =======================================================
+library(survival)
+library(glmnet)
+library(survminer)
+library(ggplot2)
+library(dplyr)
+library(patchwork) 
+
+
+scaled_abundance <- scale(microbiota_data)
+full_data <- cbind(meta_data, scaled_abundance)
+
+
+
+clean_data <- na.omit(full_data)
+
+bacterium_names <- colnames(microbiota_data)
+microbio_clean <- as.matrix(clean_data[, bacterium_names])
+meta_clean <- clean_data[, !colnames(clean_data) %in% bacterium_names]
+
+
+
+surv_obj <- Surv(meta_clean$survival_time, meta_clean$survival_state)
+
+set.seed(200)
+cv_fit <- cv.glmnet(x = microbio_clean, y = surv_obj, family = "cox", alpha = 1)
+
+selected_lambda <- cv_fit$lambda.min
+coefs <- coef(cv_fit, s = selected_lambda)
+
+selected_bacteria <- rownames(coefs)[coefs[, 1] != 0]
+
+
+selected_bacteria <- selected_bacteria[-4]
+
+if (length(selected_bacteria) > 0) {
+  covariates <- c("stage", "chemotherapy", "age", "gender", "location", "differentiation")
+  final_variables <- c(covariates, selected_bacteria)
+  final_variables_safe <- paste0("`", final_variables, "`")
+
+  formula_str <- paste("Surv(survival_time, survival_state) ~", 
+                       paste(final_variables_safe, collapse = " + "))
+  final_formula <- as.formula(formula_str)
+  final_cox_model <- coxph(final_formula, data = clean_data)
+  print(summary(final_cox_model))
+  
+}
+
+
+
+
+cox_summary <- summary(final_cox_model)
+cox_summary_df <- as.data.frame(cox_summary$coefficients)
+
+# 清理列名
+cox_summary_df$variable <- rownames(cox_summary_df)
+rownames(cox_summary_df) <- NULL
+cox_summary_df$variable <- gsub("`", "", cox_summary_df$variable)
+
+colnames(cox_summary_df)[colnames(cox_summary_df) == "coef"] <- "Estimate"
+colnames(cox_summary_df)[colnames(cox_summary_df) == "se(coef)"] <- "Std. Error"
+
+total_n <- final_cox_model$n
+total_events <- final_cox_model$nevent
+
+all_vars <- all.vars(final_cox_model$formula)
+
+covariates_list <- paste(all_vars[3:length(all_vars)], collapse = ", ")
+
+plot_data <- cox_summary_df %>%
+  mutate(
+    hazard_ratio = exp(Estimate),
+    ci_low = exp(Estimate - 1.96 * `Std. Error`),
+    ci_high = exp(Estimate + 1.96 * `Std. Error`),
+    
+    estimate_str = format(round(Estimate, 2), nsmall = 2),
+    p_value_str = ifelse(`Pr(>|z|)` < 0.001, "< 0.001", format(round(`Pr(>|z|)`, 3), nsmall = 3)),
+    hr_ci_str = paste0(format(round(hazard_ratio, 2), nsmall = 2), 
+                       " (", format(round(ci_low, 2), nsmall = 2), "-", 
+                       format(round(ci_high, 2), nsmall = 2), ")"),
+
+    variable_wrapped = str_wrap(variable, width = 20)
+  ) %>%
+  arrange(hazard_ratio) %>%
+  mutate(variable_wrapped = factor(variable_wrapped, levels = .$variable_wrapped))
+
+
+
+p_table <- ggplot(plot_data, aes(y = variable_wrapped)) +
+
+  geom_text(aes(x = 0, label = variable_wrapped), hjust = 0, size = 3.5) +
+
+  geom_text(aes(x = 2.5, label = p_value_str), hjust = 0.5) +
+
+  geom_text(aes(x = 4.5, label = hr_ci_str), hjust = 0.5) +
+
+  annotate("text", x = 0, y = nrow(plot_data) + 1.2, label = "Variables", hjust = 0, fontface = "bold") +
+  annotate("text", x = 2.5, y = nrow(plot_data) + 1.2, label = "P-value", hjust = 0.5, fontface = "bold") +
+  annotate("text", x = 4.5, y = nrow(plot_data) + 1.2, label = "Hazard Ratio (95% CI)", hjust = 0.5, fontface = "bold") +
+  
+  theme_void() +
+  coord_cartesian(xlim = c(0, 6), ylim = c(0.5, nrow(plot_data) + 1.5))
+
+  annotate("text", x = 0, y = nrow(plot_data) + 1.2, label = "Variable", hjust = 0, fontface = "bold") +
+  annotate("text", x = 1.5, y = nrow(plot_data) + 1.2, label = "Estimate", hjust = 0.5, fontface = "bold") +
+  annotate("text", x = 2.5, y = nrow(plot_data) + 1.2, label = "Std. Error", hjust = 0.5, fontface = "bold") +
+  annotate("text", x = 3.5, y = nrow(plot_data) + 1.2, label = "P-value", hjust = 0.5, fontface = "bold") +
+  annotate("text", x = 4.7, y = nrow(plot_data) + 1.2, label = "Odds Ratio (95% CI)", hjust = 0.5, fontface = "bold") +
+  
+  theme_void() +
+  coord_cartesian(xlim = c(0, 5.7))
+
+
+p_forest <- ggplot(plot_data, aes(x = hazard_ratio, y = variable_wrapped)) +
+  geom_vline(xintercept = 1, linetype = "dashed", color = "grey50") +
+  geom_point(size = 2.5, color = "firebrick") + 
+  geom_errorbarh(aes(xmin = ci_low, xmax = ci_high), height = 0.2, color = "firebrick") +
+  labs(x = "Hazard Ratio",
+  title = " ") +
+  scale_x_log10() +
+  theme_classic() +
+  theme(
+    axis.text.y = element_blank(),
+    axis.ticks.y = element_blank(),
+    axis.line.y = element_blank(),
+    axis.title.y = element_blank(),
+    panel.grid.major.x = element_line(color = "grey90", linetype = "dotted")
+  )
+
+final_plot <- p_table + p_forest + plot_layout(widths = c(2, 1))
+
+
+pdf("figs/figS3/forest_plot_survival_response.pdf", width = 10, height = 6)
+print(final_plot)
 dev.off()

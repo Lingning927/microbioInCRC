@@ -7,15 +7,17 @@ library(ggtree)
 library(randomForest)
 library(pROC)
 library(metagenomeSeq)
+library(ggsci)
 source("scripts/methods.R")
 #load the data
 {
-  genus_summed <- readRDS("data/genus_summed.rds")
+  genus_summed <- readRDS("MicrobioInCRC/data/genus_summed.rds")
   genus_summed <- genus_summed[which(substr(rownames(genus_summed), 1, 1) %in% c("N", "a", "T")), ]
   genus_summed <- genus_summed[, which(colSums(genus_summed > 0) > 0.05*nrow(genus_summed))]
   feature_summed <- genus_summed
-  patient_info <- readRDS("data/patient_info.rds")
+  patient_info <- readRDS("MicrobioInCRC/data/patient_info.rds")
 }
+
 
 #PCoA
 for (problem in c("I.II.III.IV", "HD_MD", "Location", "age", "gender", "survival")) {
@@ -29,7 +31,6 @@ for (problem in c("I.II.III.IV", "HD_MD", "Location", "age", "gender", "survival
     pc <- round(pcoa$eig/sum(pcoa$eig)*100,digits=2)
     pc12 <- as.data.frame(pc12)
     df <- cbind(pc12, data.frame(Group = response))
-
     p1 <- ggplot(data=df,aes(x=V1,y=V2,color=Group))+#指定数据、X轴、Y轴，颜色
         geom_point(size=2) +#绘制点图并设定大小
         theme_classic(base_size = 14) +
@@ -42,6 +43,8 @@ for (problem in c("I.II.III.IV", "HD_MD", "Location", "age", "gender", "survival
                 alpha=0.1,
                 show.legend = T)  +
                 theme(legend.position = "top")
+    colnames(df)[1:2] <- c("PCoA1", "PCoA")
+    write.csv(df, paste0("figdata/fig2_", problem, ".csv"))
     pdf(paste0("figs/fig2/pcoa", problem, "_genus.pdf"), width = 4, height = 4)
       print(p1)
     dev.off()
@@ -50,13 +53,13 @@ for (problem in c("I.II.III.IV", "HD_MD", "Location", "age", "gender", "survival
 
 #ROC plot
 {
-    train_genus <- readRDS("data/train_genus.rds")
+    train_genus <- readRDS("MicrobioInCRC/data/train_genus.rds")
     colnames(train_genus) <- paste0("g_", colnames(train_genus), "")
-    train_response <- readRDS("data/train_response.rds")
+    train_response <- readRDS("MicrobioInCRC/data/train_response.rds")
 
-    test_genus <- readRDS("data/test_genus.rds")
+    test_genus <- readRDS("MicrobioInCRC/data/test_genus.rds")
     colnames(test_genus) <- paste0("g_", colnames(test_genus), "")
-    test_response <- readRDS("data/test_response.rds")
+    test_response <- readRDS("MicrobioInCRC/data/test_response.rds")
 
     train_feature <- cbind(train_genus)
     test_feature <- cbind(test_genus)
@@ -70,7 +73,7 @@ for (problem in c("I.II.III.IV", "HD_MD", "Location", "age", "gender", "survival
     ms_obj <- cumNorm(ms_obj, p = 0.5)
     test_feature <- t(MRcounts(ms_obj, norm = TRUE, log = FALSE))
 
-    patient_info <- readRDS("data/patient_info.rds")
+    patient_info <- readRDS("MicrobioInCRC/data/patient_info.rds")
 }
 
 
@@ -132,6 +135,7 @@ for (problem in problem_list) {
     roc_problems <- rbind(roc_problems, roc_data)
 }
 roc_problems$problem <- factor(roc_problems$problem, levels = name_ps)
+write.csv(roc_problems, "figdata/fig3h.csv")
 pdf("figs/fig2/ROC_Problem_in_CRC_train.pdf", height = 3, width = 5)
 ggplot(roc_problems, aes(x = 1 - fpr, y = tpr, color = problem)) +
   geom_line(size = 0.75) +
@@ -176,6 +180,7 @@ for (problem in problem_list) {
     roc_problems <- rbind(roc_problems, roc_data)
 }
 roc_problems$problem <- factor(roc_problems$problem, levels = name_ps)
+write.csv(roc_problems, "figdata/fig3I.csv")
 pdf("figs/fig2/ROC_Problem_in_CRC_test.pdf", height = 3, width = 5)
 ggplot(roc_problems, aes(x = 1 - fpr, y = tpr, color = problem)) +
   geom_line(size = 0.75) +
@@ -217,6 +222,7 @@ for (problem in problem_list) {
 
 rownames(mean_df) <- paste0("g_", top_genus)
 colnames(mean_df)[3:4] <- c("Female", "Male")
+write.csv(mean_df, "figdata/fig2G.csv")
 pdf(paste0("figs/fig2/mean_top_genus_heatmap.pdf"), width = 7, height = 6)
 ph <- pheatmap(mean_df, cluster_rows = TRUE, cluster_cols = FALSE, scale = "none", show_colnames = TRUE,
             show_rownames = TRUE, fontsize = 12)

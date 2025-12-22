@@ -6,7 +6,7 @@ library(tidyr)
 
 #load the data
 {
-  genus_summed <- readRDS("data/genus_summed.rds")
+  genus_summed <- readRDS("MicrobioInCRC/data/genus_summed.rds")
   genus_summed <- genus_summed[which(substr(rownames(genus_summed), 1, 1) %in% c("N", "a", "T")), ]
   genus_summed <- genus_summed[, which(colSums(genus_summed > 0) > 0.05*nrow(genus_summed))]
 
@@ -61,11 +61,9 @@ ggplot(dca_points, aes(x = DCA1, y = DCA2, color = Group)) +
 dev.off()
 
 #Stack bar plot
-genus_summed <- readRDS("data/genus_summed.rds")
-family_summed <- readRDS("data/family_summed.rds")
+genus_summed <- readRDS("MicrobioInCRC/data/genus_summed.rds")
+family_summed <- readRDS("MicrobioInCRC/data/family_summed.rds")
 
-genus_summed <- log(genus_summed + 1)
-family_summed <- log(family_summed + 1)
 
 construct_stack_df <- function(genus_summed) {
     top_genus <- colnames(genus_summed)[order(colSums(genus_summed[substr(rownames(genus_summed), 1, 1) == "T", ]), decreasing = TRUE)[1:19]]
@@ -81,11 +79,11 @@ construct_stack_df <- function(genus_summed) {
     summarise(across(-Genus, mean, na.rm = TRUE))
     group_means_normalized <- group_means %>%
     mutate(Total = rowSums(select(., -Group))) %>%
-    pivot_longer(-c(Group, Total), names_to = "Variable", values_to = "Mean") %>%
+    tidyr::pivot_longer(-c(Group, Total), names_to = "Variable", values_to = "Mean") %>%
     mutate(Proportion = Mean / Total) %>%
     select(-Mean, -Total)
-
-    level <- colnames(top_genus_mat)[order(group_means_normalized[group_means_normalized$Group == "T", 3])]
+    value <- group_means_normalized[group_means_normalized$Group == "T", 3]
+    level <- colnames(top_genus_mat)[order(value$Proportion)]
     level[1:19] <- rev(level[1:19])
 
     group_means_normalized$Variable <- factor(group_means_normalized$Variable,
@@ -114,6 +112,7 @@ col <- rev(c(
 ))
 
 group_means_normalized <- construct_stack_df(genus_summed)
+
 pdf("figs/fig3/stack_bar_genus.pdf", width = 7, height = 3.5)
 ggplot(group_means_normalized, aes(x = Group, y = Proportion, fill = Variable)) +
   geom_bar(stat = "identity") +
@@ -209,7 +208,6 @@ top_feature_data_melted$Feature <- factor(top_feature_data_melted$Feature, level
 top_feature_data_melted$value <- log(top_feature_data_melted$value + 1)
 
 top_feature_data_melted$Class <- factor(top_feature_data_melted$Class, levels = rev(levels(top_10_feature_data_melted$Class)))
-
 pdf("figs/fig3/boxplot_ca_genus.pdf", width = 5, height = 6)
 ggplot(top_feature_data_melted, aes(x = Feature, y = value, fill = Class)) +
   geom_boxplot(outlier.size = 0.8) +

@@ -10,17 +10,17 @@ library(metagenomeSeq)
 source("scripts/methods.R")
 #load the data
 {
-  genus_summed <- readRDS("data/genus_summed.rds")
+  genus_summed <- readRDS("MicrobioInCRC/data/genus_summed.rds")
   genus_summed <- genus_summed[which(substr(rownames(genus_summed), 1, 1) %in% c("N", "a", "T")), ]
   genus_summed <- genus_summed[, which(colSums(genus_summed > 0) > 0.05*nrow(genus_summed))]
   feature_summed <- genus_summed
-  patient_info <- readRDS("data/patient_info.rds")
+  patient_info <- readRDS("MicrobioInCRC/data/patient_info.rds")
 }
 
 #paired CRC samples
 normal_names <- rownames(feature_summed)[11:68]
 crc_names <- sub("^N", "T", rownames(feature_summed)[11:68])
-feature_summed <- feature_summed[crc_names, ]
+feature_summed <- feature_summed[which(rownames(feature_summed) %in% crc_names), ]
 
 #PCoA
 for (problem in c("I.II.III.IV", "HD_MD", "Location", "age", "gender", "survival")) {
@@ -50,19 +50,21 @@ for (problem in c("I.II.III.IV", "HD_MD", "Location", "age", "gender", "survival
     pdf(paste0("figs/figS3/Sub_pcoa", problem, "_genus.pdf"), width = 4, height = 4)
       print(p1)
     dev.off()
+    colnames(df)[1:2] <- c("PCoA1", "PCoA2")
+    write.csv(df, paste0("figdata/figS2_", problem, ".csv"))
 }
 
 
 #ROC plot
 {
-    feature_summed <- genus_summed
     all_feature <- feature_summed
     ms_obj <- newMRexperiment(t(all_feature))
     ms_obj <- cumNorm(ms_obj, p = 0.5)
     all_feature <- t(MRcounts(ms_obj, norm = TRUE, log = FALSE))
 
-    patient_info <- readRDS("data/patient_info.rds")
+    patient_info <- patient_info[, rownames(all_feature)]
 }
+feature_summed <- feature_summed[crc_names, ]
 
 #ROC in train set
 problem_list <- c("Location", "I.II_III.IV", "I.II.III_IV", "HD_MD", "survival")
@@ -76,6 +78,7 @@ for (problem in problem_list) {
     roc_data <- res_roc$roc_data
     auc <- round(res_roc$auc, 3)
     roc_data$problem <- rep(paste0(problem, "(AUC = ", auc, ")"), dim(roc_data)[1])
+    print(paste0(problem, "(AUC = ", auc, ")"))
     name_ps <- c(name_ps, paste0(problem, "(AUC = ", auc, ")"))
     roc_problems <- rbind(roc_problems, roc_data)
 }

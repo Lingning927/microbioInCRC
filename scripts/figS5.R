@@ -125,7 +125,7 @@ results$test_set_metrics
 cm_data <- as.data.frame(results$test_confusion_matrix)
   colnames(cm_data) <- c("Predicted", "Actual", "Count")
 
-pdf("figs/figS4/cm_1.pdf", height = 3, width = 3.2)
+pdf("figs/figS5/cm_1.pdf", height = 3, width = 3.2)
   heatmap_plot <- ggplot(cm_data, aes(x = Actual, y = Predicted, fill = Count)) +
     geom_tile(color = "white", linewidth = 0.8) +
     geom_text(aes(label = Count), color = "black", size = 5) +
@@ -152,7 +152,7 @@ results$test_confusion_matrix
 cm_data <- as.data.frame(results$test_confusion_matrix)
   colnames(cm_data) <- c("Predicted", "Actual", "Count")
   
-pdf("figs/figS4/cm_2.pdf", height = 3, width = 3.2)
+pdf("figs/figS5/cm_2.pdf", height = 3, width = 3.2)
   heatmap_plot <- ggplot(cm_data, aes(x = Actual, y = Predicted, fill = Count)) +
     geom_tile(color = "white", linewidth = 0.8) +
     geom_text(aes(label = Count), color = "black", size = 5) +
@@ -253,10 +253,10 @@ final_model <- randomForest(x = X_train_full, y = y_train_full)
 model <- final_model
 
 
-pdf("figs/figS4/feature_improtance.pdf", height = 6, width = 6)
+pdf("figs/figS5/feature_improtance.pdf", height = 6, width = 6)
 print(p1)
 dev.off()
 
-pdf("figs/figS4/feature_heatmap.pdf", height = 6, width = 6)
+pdf("figs/figS5/feature_heatmap.pdf", height = 6, width = 6)
 print(p2)
 dev.off()
